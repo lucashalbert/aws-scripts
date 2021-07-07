@@ -20,11 +20,6 @@ import sys
 import boto3
 
 
-# Define variables
-ipset_cidrs = None
-# Create a list of valid entries
-valid_entries = list()
-
 class Bcolors:
     """
     Color class for making text pop
@@ -307,6 +302,13 @@ def collect_contents():
 
 
 def main():
+    """
+    Program main
+    """
+    # Define variables
+    ipset_cidrs = None
+    valid_entries = list()
+
     # Get elements from specific IPSet
     if ipset_id is not None and region is not None and dry_run is False:
         # Get all ipset CIDRs
@@ -329,7 +331,7 @@ def main():
         # Check for IPv4 Ranges
         if content.find("-") > 0:
             range_summary, range_valid, range_msg = format_ipv4_range(content)
-            print("{0:25}: {1} - {2}  --  {3}".format(str(content), range_msg, range_valid, range_summary))
+            print("{0:25}: {1} - Range Summarized to: {2}".format(str(content), range_msg, range_summary))
 
             # Iterate over each network in range summary
             for net in range_summary:
@@ -397,6 +399,8 @@ def main():
         else:
             print("\nNumber of updates to WAF: {}".format(num_updates))
 
+        print("\nTotal number of nets in IPSet List: {}".format(len(ipset_cidrs)))
+
 
         # Check if a change-token was provided
         if change_token is None:
@@ -409,4 +413,4 @@ def main():
 
 
 if __name__ == "__main__":
-     main()
+    main()
