@@ -101,14 +101,14 @@ def validate_ipv4_net(network: str) -> Tuple[bool, str]:
         ipv4_network = ipaddress.IPv4Network(network)
     except (ipaddress.AddressValueError, ipaddress.NetmaskValueError, ValueError) as error:
         valid = False
-        msg = "Provided string is not a valid IPv4 network: {}.".format(error)
+        msg = "{}Provided string is not a valid IPv4 network: {}.{}".format(Bcolors.FAIL, error, Bcolors.ENDC)
     else:
         valid = True
-        msg = "String is a valid IPv4 network."
+        msg = "{}String is a valid IPv4 network.{}".format(Bcolors.OKGREEN, Bcolors.ENDC)
 
     if valid is True and ipv4_network.is_global is False:
         valid = False
-        msg = "String is a valid, but {}private{}, IPv4 network. This network will be excluded.".format(Bcolors.WARNING, Bcolors.ENDC)
+        msg = "{}String is not a valid {}global{}{} IPv4 network. This network will be excluded.{}".format(Bcolors.WARNING, Bcolors.UNDERLINE, Bcolors.ENDC, Bcolors.WARNING, Bcolors.ENDC)
 
     return valid, msg
 
@@ -162,7 +162,7 @@ def format_ipv4_range(network: str) -> Tuple[list, bool, str]:
     try:
         start = ipaddress.ip_address(ipv4_range[0])
     except (ipaddress.AddressValueError, ipaddress.NetmaskValueError, ValueError) as error:
-        msg = "Provided IP range starting address is not a valid IPv4 address: {}.".format(error)
+        msg = "{}Provided IP range starting address is not a valid IPv4 address: {}.{}".format(Bcolors.FAIL, error, Bcolors.ENDC)
         return [], False, msg
 
     # Validate Ending IP in range
@@ -177,10 +177,10 @@ def format_ipv4_range(network: str) -> Tuple[list, bool, str]:
         range_summary = list(ipaddress.summarize_address_range(start, end))
     except (ipaddress.AddressValueError, ipaddress.NetmaskValueError, ValueError) as error:
         valid = False
-        msg = "Provided IP range does not appear to be valid: {}.".format(error)
+        msg = "{}Provided IP range is not valid: {}.{}".format(Bcolors.FAIL, error, Bcolors.ENDC)
     else:
         valid = True
-        msg = "Provided IP range is valid."
+        msg = "{}Provided IP range is valid.{}".format(Bcolors.HEADER, Bcolors.ENDC)
 
     if valid is True:
         return range_summary, valid, msg
@@ -223,10 +223,10 @@ def exists_in_list(search_string: str, list_to_search: list) -> Tuple[bool, str]
     #if any(search_string in element for element in list_to_search):
     if search_string in list_to_search:
         exists = True
-        msg = "The string '{}' exists within the specified IPSet list".format(search_string)
+        msg = "The CIDR '{}' exists within the IPSet list".format(search_string)
     else:
         exists = False
-        msg = "The string '{}' does {}NOT{} exist within the specified IPSet list".format(search_string, Bcolors.WARNING, Bcolors.ENDC)
+        msg = "The CIDR '{}' does {}NOT{} exist within the IPSet list".format(search_string, Bcolors.WARNING, Bcolors.ENDC)
     return exists, msg
 
 
@@ -308,6 +308,9 @@ def main():
     # Define variables
     ipset_cidrs = None
     valid_entries = list()
+    valid = None
+    msg = ""
+    msg2 = ""
 
     # Get elements from specific IPSet
     if ipset_id is not None and region is not None and dry_run is False:
@@ -331,33 +334,36 @@ def main():
         # Check for IPv4 Ranges
         if content.find("-") > 0:
             range_summary, range_valid, range_msg = format_ipv4_range(content)
-            print("{0:25}: {1} - Range Summarized to: {2}".format(str(content), range_msg, range_summary))
+            range_summary = [ str(x) for x in range_summary]
+            #print("{0:35}: {1} - Range Summarized to: {2}".format(content, range_msg, ", ".join(range_summary)))
+            print("\n{0:31}: {1} - Range Summarized to the following:".format(content, range_msg))
 
             # Iterate over each network in range summary
             for net in range_summary:
                 # Validate network
                 valid, msg = validate_ipv4_net(net)
 
-                # convert network string to a ipv4 ip_interface
-                net = ipaddress.ip_interface(net)
+                if valid is True:
+                    # convert network string to a ipv4 ip_interface
+                    net = ipaddress.ip_interface(net)
 
-                # If IP is valid and dry-run is false, check if ip exists in IPSet
-                if valid and dry_run is False and ipset_cidrs is not None:
-                    # Check if CIDR already exists in ipset
-                    exists, msg2 = exists_in_list(str(net), ipset_cidrs)
+                    # If dry-run is false, check if ip exists in IPSet
+                    if dry_run is False and ipset_cidrs is not None:
+                        # Check if CIDR already exists in ipset
+                        exists, msg2 = exists_in_list(str(net), ipset_cidrs)
 
-                    # If the IP does not exist, append it to a list of entries
-                    if exists is False:
-                        valid_entries.append(str(net))
+                        # If the IP does not exist, append it to a list of entries
+                        if exists is False:
+                            valid_entries.append(str(net))
                 else:
                     msg2 = ""
 
                 # Print status of network and any relevent messages
-                print("{0:25}: {1} {2}".format(str(net), msg, msg2))
+                print("{0:31}: {1} {2}".format(str("    " + str(net)), msg, msg2))
 
         # Find and ignore IPv6 addresses
         elif content.find(":") > 0:
-            print("{0:25}: {1}".format(content, validate_ipv6_net(content)))
+            print("{0:31}: {1}".format(content, validate_ipv6_net(content)))
 
         # Find remaining IPv4 addresses
         else:
@@ -367,40 +373,41 @@ def main():
             # Validate network
             valid, msg = validate_ipv4_net(net)
 
-            # convert network string to a ipv4 ip_interface
-            net = ipaddress.ip_interface(net)
+            if valid is True:
+                # convert network string to a ipv4 ip_interface
+                net = ipaddress.ip_interface(net)
 
-            # If IP is valid and dry-run is false, check if ip exists in IPSet
-            if valid and dry_run is False and ipset_cidrs is not None:
-                # Check if CIDR already exists in ipset
-                exists, msg2 = exists_in_list(str(net), ipset_cidrs)
+                # If dry-run is false, check if ip exists in IPSet
+                if dry_run is False and ipset_cidrs is not None:
+                    # Check if CIDR already exists in ipset
+                    exists, msg2 = exists_in_list(str(net), ipset_cidrs)
 
-                # If the IP does not exist, append it to a list of entries
-                if exists is False:
-                    valid_entries.append(str(net))
+                    # If the IP does not exist, append it to a list of entries
+                    if exists is False:
+                        valid_entries.append(str(net))
             else:
                 msg2 = ""
 
             # Print status of network and any relevent messages
-            print("{0:25}: {1} {2}".format(str(net), msg, msg2))
+            #print("{0:35}: {1} {2}".format(str(net), msg, msg2))
+            print("{0:31}: {1} {2}".format(str("    " + str(net)), msg, msg2))
 
 
     # Summarize all WAF updates into a single usable CLI string
     updates, num_updates = summarize_waf_updates(valid_entries)
 
-    print("\nTotal number of nets provided: {}".format(total_num_nets))
+    if ipset_cidrs is not None:
+        print("\nTotal number of nets in IPSet List: {}".format(len(ipset_cidrs)))
 
+    print("\nTotal number of nets provided: {}".format(total_num_nets))
 
     if dry_run is False:
         # Check if there are any updates necessary and/or if the script is in dry-run mode
         if num_updates == 0:
-            print("\nNo WAF updates necessary")
+            print("\nNo WAF IPSet updates necessary")
             sys.exit(0)
         else:
             print("\nNumber of updates to WAF: {}".format(num_updates))
-
-        print("\nTotal number of nets in IPSet List: {}".format(len(ipset_cidrs)))
-
 
         # Check if a change-token was provided
         if change_token is None:
