@@ -416,7 +416,7 @@ def main():
 
         # Print generated AWS CLI WAF update string
         print("\nUpdate WAF IP set list via the following command:")
-        print("\033[1;32;47maws waf-regional update-ip-set --region us-west-2 --ip-set-id {} --change-token {} --updates {}\x1b[0m\n".format(ipset_id, change_token, updates))
+        print("\033[1;32;47maws waf-regional update-ip-set --region {} --ip-set-id {} --change-token {} --updates {}\x1b[0m\n".format(region, ipset_id, change_token, updates))
 
 
 if __name__ == "__main__":
