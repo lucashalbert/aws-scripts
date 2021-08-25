@@ -44,10 +44,18 @@ parser.add_argument('-l', '--ip-list',  dest='ip_list', type=str,
     help='Comma separated list of IPs/CIDRs')
 parser.add_argument('-ii', '--ipset-id', dest='ipset_id', type=str,
     help='IP Set ID of WAF IP list')
+parser.add_argument('-in', '--ipset-name', dest='ipset_name',
+    help='WAFv2 IPSet ID')
 parser.add_argument('-r', '--region', dest='region', type=str,
     help='Region that the WAF IPSet resides in')
 parser.add_argument('-ct', '--change-token', dest='change_token', type=str,
     help='IPSet change token')
+parser.add_argument('-lt', '--lock-token', dest='lock_token', type=str,
+    help='WAFv2 lock token')
+parser.add_argument('-is', '--ipset-scope', dest='scope', type=str, default="REGIONAL",
+    help='WAFv2 scope CLOUDFRONT|REGIONAL')
+parser.add_argument('-v2', '--wafv2', dest='version2', action='store_true', default=False,
+    help='WAFv2 version toggle')
 parser.add_argument('-n', '--dry-run', dest='dry_run', action='store_true', default=False,
     help='Toggle dry-run mode')
 
@@ -61,6 +69,12 @@ if (args.filename is None and args.ip_list is None) or (args.filename is not Non
 if (args.ipset_id is not None and args.region is None):
     parser.error("Argument -ii/--ipset-id requires that argument -r/--region be specified")
 
+if (args.ipset_name is not None and args.ipset_id is None):
+    parser.error("Argument -in/--ipset-name requires that argument -ii/--ipset-id be specified")
+
+if (args.version2 is True and args.ipset_id is not None and args.ipset_name is None):
+    parser.error("Argument -ii/--ipset-id requires that argument -in/--ipset-name be specified")
+
 if (args.change_token is not None and args.region is None):
     parser.error("Argument -ct/--change-token requires that argument -r/--region be specified")
 
@@ -73,9 +87,13 @@ if (args.region is not None and
 filename = args.filename
 ip_list = args.ip_list
 ipset_id = args.ipset_id
+ipset_name = args.ipset_name
+scope = args.scope
 region = args.region
 change_token = args.change_token
+lock_token = args.lock_token
 dry_run = args.dry_run
+version2 = args.version2
 
 
 
@@ -188,7 +206,7 @@ def format_ipv4_range(network: str) -> Tuple[list, bool, str]:
 
 
 
-def get_ipset_elements(ipset_id: str, region: str) -> Tuple[list, bool, str]:
+def get_wafv1_ipset_elements(ipset_id: str, region: str) -> Tuple[list, bool, str]:
     """
     Retrieves all elements of a regional WAF ipset list
 
@@ -203,11 +221,38 @@ def get_ipset_elements(ipset_id: str, region: str) -> Tuple[list, bool, str]:
     except (client.exceptions.WAFInternalErrorException, client.exceptions.WAFInvalidAccountException, client.exceptions.WAFNonexistentItemException) as error:
         valid = False
         msg = "Something went wrong while retrieving WAF ipset list: {}.".format(error)
+        elements = list()
     else:
         valid = True
         msg = "Successfully retrieved WAF ipset list"
 
-    elements = [ x["Value"] for x in response['IPSet']['IPSetDescriptors']]
+        elements = [ x["Value"] for x in response['IPSet']['IPSetDescriptors']]
+
+    return elements, valid, msg
+
+
+def get_wafv2_ipset_elements(ipset_scope: str, ipset_name: str, ipset_id: str, region: str) -> Tuple[list, bool, str]:
+    """
+    Retrieves all elements of a regional WAF ipset list
+
+    :param ipset_id: string representation of the ipset id
+    :param region: string representation of the region that the ipset resides within
+    :return: tuple of (list, bool, str). ([IPv4Network, IPv4Network...], True, msg) if valid; ([], False, msg) if invalid
+    """
+    client = boto3.client('wafv2', region_name=region)
+
+    try:
+        response = client.get_ip_set(Name=ipset_name, Scope=ipset_scope, Id=ipset_id)
+    except (client.WAFV2.Client.exceptions.WAFInternalErrorException, client.WAFV2.Client.exceptions.WAFInvalidParameterException,
+        client.WAFV2.Client.exceptions.WAFInvalidResourceException, client.WAFV2.Client.exceptions.WAFNonexistentItemException,
+        client.WAFV2.Client.exceptions.WAFInvalidOperationException) as error:
+        valid = False
+        msg = "Something went wrong while retrieving WAFv2 ipset list: {}.".format(error)
+    else:
+        valid = True
+        msg = "Successfully retrieved WAFv2 ipset list"
+
+    elements = [ x for x in response["IPSet"]["Addresses"]]
 
     return elements, valid, msg
 
@@ -256,7 +301,7 @@ def read_contents_from_file(filename: str) -> Tuple[list, bool, str]:
 
 
 
-def summarize_waf_updates(entries: list) -> Tuple[str, int]:
+def summarize_waf_updates(version2: bool, entries: list) -> Tuple[str, int]:
     """
     Summarize the necessary WAF updates and generate a CLI update string
 
@@ -266,14 +311,19 @@ def summarize_waf_updates(entries: list) -> Tuple[str, int]:
     # Create a list of WAF updates
     updates = list()
 
-    # Generate the CLI update string
-    [updates.append("Action=\"INSERT\",IPSetDescriptor=\'{{Type=\"IPV4\",Value=\"{}\"}}\'".format(entry)) for entry in entries]
+    if version2 is False:
+        # Generate the CLI update string
+        [updates.append("Action=\"INSERT\",IPSetDescriptor=\'{{Type=\"IPV4\",Value=\"{}\"}}\'".format(entry)) for entry in entries]
+
+    else:
+        [updates.append(entry) for entry in entries]
 
     # Calculate total number of WAF updates
     num_waf_updates = len(updates)
 
     # Add a space between each update action phrase
     updates = " ".join(updates)
+
 
     return updates, num_waf_updates
 
@@ -301,75 +351,53 @@ def collect_contents():
 
 
 
-def main():
-    """
-    Program main
-    """
-    # Define variables
-    ipset_cidrs = None
-    valid_entries = list()
-    valid = None
-    msg = ""
-    msg2 = ""
+# def main():
+#     """
+#     Program main
+#     """
+# Define variables
+ipset_cidrs = None
+valid_entries = list()
+version2_valid_entries = list()
+valid = None
+msg = ""
+msg2 = ""
 
-    # Get elements from specific IPSet
-    if ipset_id is not None and region is not None and dry_run is False:
+# Get elements from specific IPSet
+if ipset_id is not None and region is not None and dry_run is False:
+
+    if version2 is False:
         # Get all ipset CIDRs
-        ipset_cidrs, ipset_status, msg = get_ipset_elements(ipset_id, region)
+        ipset_cidrs, ipset_status, msg = get_wafv1_ipset_elements(ipset_id, region)
+        if ipset_status is False:
+            print("{}".format(msg))
+            sys.exit(3)
+
+    if version2 is True:
+        ipset_cidrs, ipset_status, msg = get_wafv2_ipset_elements(scope, ipset_name, ipset_id, region)
         if ipset_status is False:
             print("{}".format(msg))
             sys.exit(3)
 
 
+# Get contents from file or ip-list
+contents = collect_contents()
 
-    # Get contents from file or ip-list
-    contents = collect_contents()
+# Get total number of nets provided
+total_num_nets = len(contents)
 
-    # Get total number of nets provided
-    total_num_nets = len(contents)
+# Loop over contents
+for content in contents:
 
-    # Loop over contents
-    for content in contents:
+    # Check for IPv4 Ranges
+    if content.find("-") > 0:
+        range_summary, range_valid, range_msg = format_ipv4_range(content)
+        range_summary = [ str(x) for x in range_summary]
+        #print("{0:35}: {1} - Range Summarized to: {2}".format(content, range_msg, ", ".join(range_summary)))
+        print("\n{0:31}: {1} - Range Summarized to the following:".format(content, range_msg))
 
-        # Check for IPv4 Ranges
-        if content.find("-") > 0:
-            range_summary, range_valid, range_msg = format_ipv4_range(content)
-            range_summary = [ str(x) for x in range_summary]
-            #print("{0:35}: {1} - Range Summarized to: {2}".format(content, range_msg, ", ".join(range_summary)))
-            print("\n{0:31}: {1} - Range Summarized to the following:".format(content, range_msg))
-
-            # Iterate over each network in range summary
-            for net in range_summary:
-                # Validate network
-                valid, msg = validate_ipv4_net(net)
-
-                if valid is True:
-                    # convert network string to a ipv4 ip_interface
-                    net = ipaddress.ip_interface(net)
-
-                    # If dry-run is false, check if ip exists in IPSet
-                    if dry_run is False and ipset_cidrs is not None:
-                        # Check if CIDR already exists in ipset
-                        exists, msg2 = exists_in_list(str(net), ipset_cidrs)
-
-                        # If the IP does not exist, append it to a list of entries
-                        if exists is False:
-                            valid_entries.append(str(net))
-                else:
-                    msg2 = ""
-
-                # Print status of network and any relevent messages
-                print("{0:31}: {1} {2}".format(str("    " + str(net)), msg, msg2))
-
-        # Find and ignore IPv6 addresses
-        elif content.find(":") > 0:
-            print("{0:31}: {1}".format(content, validate_ipv6_net(content)))
-
-        # Find remaining IPv4 addresses
-        else:
-            # Set net variable equal to content
-            net = content
-
+        # Iterate over each network in range summary
+        for net in range_summary:
             # Validate network
             valid, msg = validate_ipv4_net(net)
 
@@ -385,39 +413,86 @@ def main():
                     # If the IP does not exist, append it to a list of entries
                     if exists is False:
                         valid_entries.append(str(net))
+
+                if version2 is True:
+                    version2_valid_entries.append(str(net))
             else:
                 msg2 = ""
 
             # Print status of network and any relevent messages
-            #print("{0:35}: {1} {2}".format(str(net), msg, msg2))
             print("{0:31}: {1} {2}".format(str("    " + str(net)), msg, msg2))
 
+    # Find and ignore IPv6 addresses
+    elif content.find(":") > 0:
+        print("{0:31}: {1}".format(content, validate_ipv6_net(content)))
 
-    # Summarize all WAF updates into a single usable CLI string
-    updates, num_updates = summarize_waf_updates(valid_entries)
+    # Find remaining IPv4 addresses
+    else:
+        # Set net variable equal to content
+        net = content
 
-    if ipset_cidrs is not None:
-        print("\nTotal number of nets in IPSet List: {}".format(len(ipset_cidrs)))
+        # Validate network
+        valid, msg = validate_ipv4_net(net)
 
-    print("\nTotal number of nets provided: {}".format(total_num_nets))
+        if valid is True:
+            # convert network string to a ipv4 ip_interface
+            net = ipaddress.ip_interface(net)
 
-    if dry_run is False:
-        # Check if there are any updates necessary and/or if the script is in dry-run mode
-        if num_updates == 0:
-            print("\nNo WAF IPSet updates necessary")
-            sys.exit(0)
+            # If dry-run is false, check if ip exists in IPSet
+            if dry_run is False and ipset_cidrs is not None:
+                # Check if CIDR already exists in ipset
+                exists, msg2 = exists_in_list(str(net), ipset_cidrs)
+
+                # If the IP does not exist, append it to a list of entries
+                if exists is False:
+                    valid_entries.append(str(net))
+
+            if version2 is True:
+                version2_valid_entries.append(str(net))
         else:
-            print("\nNumber of updates to WAF: {}".format(num_updates))
+            msg2 = ""
 
-        # Check if a change-token was provided
-        if change_token is None:
-            print("\nChange token not specified. Request Change Token by using the following command:")
-            print("\033[1;32;47maws waf-regional get-change-token --region {}\x1b[0m".format(region))
+        # Print status of network and any relevent messages
+        #print("{0:35}: {1} {2}".format(str(net), msg, msg2))
+        print("{0:31}: {1} {2}".format(str("    " + str(net)), msg, msg2))
 
+
+# Summarize all WAF updates into a single usable CLI string
+updates, num_updates = summarize_waf_updates(version2, valid_entries)
+
+if ipset_cidrs is not None:
+    print("\nTotal number of nets in IPSet List: {}".format(len(ipset_cidrs)))
+
+print("\nTotal number of nets provided: {}".format(total_num_nets))
+
+if dry_run is False:
+
+        # Check if there are any updates necessary and/or if the script is in dry-run mode
+    if num_updates == 0:
+        print("\nNo WAF IPSet updates necessary")
+        sys.exit(0)
+    else:
+        print("\nNumber of updates to WAF: {}".format(num_updates))
+
+    # Check if a change-token was provided
+    if change_token is None and version2 is False:
+        print("\nChange token not specified. Request Change Token by using the following command:")
+        print("\033[1;32;47maws waf-regional get-change-token --region {}\x1b[0m".format(region))
+
+    if lock_token is None and version2 is True:
+        print("\nLock token not specified. Request Change Token by using the following command:")
+        print("\033[1;32;47maws wafv2 get-ip-set --scope {} --region {} --id {} --name {}\x1b[0m".format(scope, region, ipset_id, ipset_name))
+
+    if version2 is False:
         # Print generated AWS CLI WAF update string
         print("\nUpdate WAF IP set list via the following command:")
         print("\033[1;32;47maws waf-regional update-ip-set --region {} --ip-set-id {} --change-token {} --updates {}\x1b[0m\n".format(region, ipset_id, change_token, updates))
 
+    if version2 is True:
+        print("\nUpdate WAFv2 IP set list via the following command:")
+        print("\033[1;32;47maws wafv2 update-ip-set --scope {} --region {} --name {} --id {} --lock-token {} --addresses {}\x1b[0m\n".format(scope, region, ipset_name, ipset_id, lock_token, updates))
 
-if __name__ == "__main__":
-    main()
+
+
+# if __name__ == "__main__":
+#     main()
