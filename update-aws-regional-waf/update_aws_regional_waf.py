@@ -479,9 +479,9 @@ if dry_run is False:
         print("\nChange token not specified. Request Change Token by using the following command:")
         print("\033[1;32;47maws waf-regional get-change-token --region {}\x1b[0m".format(region))
 
-    if lock_token is None and version2 is True:
-        print("\nLock token not specified. Request Change Token by using the following command:")
-        print("\033[1;32;47maws wafv2 get-ip-set --scope {} --region {} --id {} --name {}\x1b[0m".format(scope, region, ipset_id, ipset_name))
+    # if lock_token is None and version2 is True:
+    #     print("\nLock token not specified. Request Change Token by using the following command:")
+    #     print("\033[1;32;47maws wafv2 get-ip-set --scope {} --region {} --id {} --name {}\x1b[0m".format(scope, region, ipset_id, ipset_name))
 
     if version2 is False:
         # Print generated AWS CLI WAF update string
@@ -489,8 +489,10 @@ if dry_run is False:
         print("\033[1;32;47maws waf-regional update-ip-set --region {} --ip-set-id {} --change-token {} --updates {}\x1b[0m\n".format(region, ipset_id, change_token, updates))
 
     if version2 is True:
-        print("\nUpdate WAFv2 IP set list via the following command:")
-        print("\033[1;32;47maws wafv2 update-ip-set --scope {} --region {} --name {} --id {} --lock-token {} --addresses {}\x1b[0m\n".format(scope, region, ipset_name, ipset_id, lock_token, updates))
+        # print("\nUpdate WAFv2 IP set list via the following command:")
+        # print("\033[1;32;47maws wafv2 update-ip-set --scope {} --region {} --name {} --id {} --lock-token {} --addresses {}\x1b[0m\n".format(scope, region, ipset_name, ipset_id, lock_token, updates))
+        print("\nUpdate the WAFv2 IP set list by pasting the following list into the appropriate IP Set list within the AWS console")
+        [print("\033[1;32;47m{}\x1b[0m".format(entry)) for entry in valid_entries]
 
 
 
